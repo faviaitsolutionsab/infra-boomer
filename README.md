@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: your-org/infra-boomer@v1
+      - uses: faviaitsolutionsab/infra-boomer@v1
         with:
           mode: pr
           working_dir: examples/demo/terraform
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: your-org/infra-boomer@v1
+      - uses: faviaitsolutionsab/infra-boomer@v1
         with:
           mode: merge
           working_dir: examples/demo/terraform
@@ -96,7 +96,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: your-org/infra-boomer@v1
+      - uses: faviaitsolutionsab/infra-boomer@v1
         with:
           mode: merge
           working_dir: examples/demo/terraform
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - uses: your-org/infra-boomer@v1
+      - uses: faviaitsolutionsab/infra-boomer@v1
         with:
           mode: rollup
           rollup_input_dir: rollup
