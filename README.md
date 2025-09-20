@@ -43,6 +43,42 @@ _A Terraform PR action with lint, plan, cost, and merge muscles._
 
 ## 🚀 Usage  
 
+## 🧪 Example PR comments
+
+### 📦 Terraform Plan (snippet)
+```md
+## 📦 Terraform Plan for `examples/demo/terraform`
+
+### 🚀 Terraform Plan Summary
+- ➕ (+) **Add**: `1`
+- ♻️ (~) **Change**: `0`
+- 🗑️ (-) **Destroy**: `0`
+
+✅ **Plan succeeded**
+
+<details>
+<summary>📖 Details (Click me)</summary>
+
+```terraform
+# ... Terraform plan output ...
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+</details>
+```
+
+### 🔻 Infracost (skips on zero delta)
+When the monthly cost delta is `0`, no Infracost comment is posted and any previous Infracost comment is removed. This keeps PRs noise‑free.
+
+### 🔗 Footer with clickable commit
+```md
+---
+🧑‍💻 Actor: @faviait
+📂 Dir: `examples/demo/terraform`
+🔗 Run: [logs](https://github.com/org/repo/actions/runs/1234567890)
+🔧 Commit: [abc1234](https://github.com/org/repo/commit/abc1234)
+```
+
 ### 1. PR Mode (lint + plan + cost)  
 
 ```yaml
@@ -148,6 +184,7 @@ jobs:
 | `tflint_enable` | `true` | Run TFLint. |
 | `create_plan_comment` | `true` | Post PR plan summary. |
 | `infracost_enable` | `true` | Enable Infracost (PR + merge). |
+| `infracost_silent_skip` | `false` | If `true`, when cost delta is zero the Infracost PR comment is **not posted** and any existing one is **deleted**. |
 | `currency` | `USD` | Currency for cost estimates. |
 | `slack_error_notifications` | `true` | Slack on failure (merge mode). |
 | `rollup_success_slack` | `false` | Slack rollup success (rollup mode). |
