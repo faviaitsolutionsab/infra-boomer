@@ -98,6 +98,11 @@ if totals is None or (totals[0] == 0.0 and os.path.isfile(BA_J)):
 else:
     current, future, delta = totals
 
+# Guard clause: skip comment if delta is very close to zero
+if abs(delta) < 0.01:
+    print("::notice::Infracost delta is zero → skipping PR comment.")
+    sys.exit(0)
+
 daily_current,  daily_future,  daily_delta  = current/30.0,  future/30.0,  delta/30.0
 hourly_current, hourly_future, hourly_delta = current/730.0, future/730.0, delta/730.0
 arr = arrow(delta)
