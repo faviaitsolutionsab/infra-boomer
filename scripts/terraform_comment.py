@@ -78,10 +78,12 @@ def list_all_comments(pr_number: int) -> List[dict]:
         page += 1
     return comments
 
-def find_existing_comment_id(pr_number: int, marker_html: str) -> Optional[int]:
+def find_existing_comment_id(pr_number: int, working_dir: str) -> Optional[int]:
+    # Look for our hidden marker in the comment body
+    hidden_marker = f"<!-- tf-plan:{working_dir} -->"
     for c in list_all_comments(pr_number):
         body = (c.get("body") or "")
-        if marker_html in body:
+        if hidden_marker in body:
             return c["id"]
     return None
 
@@ -184,17 +186,17 @@ def main() -> None:
     summary = build_summary_md()
     details_html = read_plan_details().rstrip()
     footer = footer_md()
-    # Compose body: header, summary, details, (ensure footer is outside <details>), marker
+    # Compose body: header, summary, details, (ensure footer is outside <details>)
     body = (
         f"{header}\n\n"
         f"{summary}\n"
         f"{details_html}\n\n"
         f"{footer}\n"
-        f"{marker_html}\n"
     )
 
     print(f"::notice::Upserting Terraform plan PR comment for {TF_ACTIONS_WORKING_DIR} with marker {marker_html}")
-    existing_id = find_existing_comment_id(pr_number, marker_html)
+    # Pass only the working dir to the marker-matching function (for hidden marker search)
+    existing_id = find_existing_comment_id(pr_number, TF_ACTIONS_WORKING_DIR)
     try:
         if existing_id:
             update_comment(existing_id, body)
