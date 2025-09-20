@@ -410,9 +410,15 @@ runs:
         script: |
           const fs = require('fs'), path = require('path');
           const { owner, repo } = context.repo;
-          const pr = context.payload.pull_request; if (!pr) return;
+          const pr = context.payload.pull_request;
+          if (!pr) { core.notice('No PR context; skipping Infracost comment.'); return; }
           const issue_number = pr.number;
-          const body = fs.readFileSync(path.join(process.env.WD, 'infracost_comment.md'), 'utf8');
+          const file = path.join(process.env.WD, 'infracost_comment.md');
+          if (!fs.existsSync(file)) {
+            core.notice('Infracost delta was zero or comment generation skipped — no comment file found, skipping.');
+            return;
+          }
+          const body = fs.readFileSync(file, 'utf8');
           const marker = `<!-- infracost-comment:${process.env.WD} -->`;
           const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
           const existing = comments.find(c => c.body && c.body.includes(marker));
