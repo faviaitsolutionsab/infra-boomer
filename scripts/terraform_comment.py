@@ -185,8 +185,11 @@ def main() -> None:
     header = f"## 📦 Terraform Plan for `{TF_ACTIONS_WORKING_DIR}` {marker_html}"
     summary = build_summary_md()
     details_html = read_plan_details().rstrip()
+    # Ensure details_html ends with </details> (strip trailing whitespace for safety)
+    if not details_html.strip().endswith("</details>"):
+        details_html += "\n</details>"
     footer = footer_md()
-    # Compose body: header, summary, details, (ensure footer is outside <details>)
+    # Compose body: header, summary, details, then footer outside details
     body = (
         f"{header}\n\n"
         f"{summary}\n"
