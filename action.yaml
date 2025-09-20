@@ -23,7 +23,7 @@ inputs:
     required: false
   aws_region:
     description: AWS region
-    default: us-east-1
+    default: us-east-2
     required: false
 
   working_dir:
