@@ -99,14 +99,18 @@ def workflow_url() -> str:
     return f"https://github.com/{REPO_OWNER_FOR_URL}/{REPO_NAME}/actions/runs/{RUN_ID}"
 
 def footer_md() -> str:
-    return (
-        "\n---\n"
-        f"🧑‍💻 **Actor**: @{GITHUB_ACTOR}\n"
-        f"⚙️ **Event**: {EVENT_NAME}\n"
-        f"📂 **Working Dir**: `{TF_ACTIONS_WORKING_DIR}`\n"
-        f"🏗️ **Workflow**: {GITHUB_WORKFLOW}\n"
-        f"🔗 **Run Logs**: [View here]({workflow_url()})\n"
-    )
+    run_url = workflow_url()
+    lines = [
+        "\n---\n",
+        f"🧑‍💻 **Actor**: @{GITHUB_ACTOR}\n",
+        f"📂 **Dir**: `{TF_ACTIONS_WORKING_DIR}`\n",
+        f"🔗 **Run**: [logs]({run_url})\n",
+    ]
+    if GITHUB_SHA:
+        commit_url = f"{os.environ.get('GITHUB_SERVER_URL','https://github.com')}/{REPO_OWNER_FOR_URL}/{REPO_NAME}/commit/{GITHUB_SHA}"
+        short = GITHUB_SHA[:7]
+        lines.append(f"🔧 **Commit**: [{short}]({commit_url})\n")
+    return "".join(lines)
 
 def build_summary_md() -> str:
     return (

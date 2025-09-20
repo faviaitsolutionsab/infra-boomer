@@ -198,14 +198,18 @@ def build_details_html(files: Dict[str, List[Dict[str, Any]]], workflow_url: str
     return "\n".join(parts)
 
 def footer_md(repo: str, run_id: str) -> str:
-    return (
-        "\n---\n"
-        f"🧑‍💻 **Actor**: @{GITHUB_ACTOR}\n"
-        f"⚙️ **Event**: {EVENT_NAME}\n"
-        f"📂 **Working Dir**: `{TF_ACTIONS_WORKING_DIR}`\n"
-        f"🏗️ **Workflow**: {GITHUB_WORKFLOW}\n"
-        f"🔗 **Run Logs**: [View here](https://github.com/{repo}/actions/runs/{run_id})\n"
-    )
+    run_url = f"https://github.com/{repo}/actions/runs/{run_id}"
+    lines = [
+        "\n---\n",
+        f"🧑‍💻 **Actor**: @{GITHUB_ACTOR}\n",
+        f"📂 **Dir**: `{TF_ACTIONS_WORKING_DIR}`\n",
+        f"🔗 **Run**: [logs]({run_url})\n",
+    ]
+    if GITHUB_SHA:
+        commit_url = f"{os.environ.get('GITHUB_SERVER_URL','https://github.com')}/{REPO_OWNER_FOR_URL}/{REPO_NAME}/commit/{GITHUB_SHA}"
+        short = GITHUB_SHA[:7]
+        lines.append(f"🔧 **Commit**: [{short}]({commit_url})\n")
+    return "".join(lines)
 
 def main() -> None:
     if EVENT_NAME not in ("pull_request", "pull_request_target"):
