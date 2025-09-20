@@ -262,7 +262,6 @@ def main() -> None:
         f"{header_md}\n\n"
         f"{summary_md}\n{helper_md}"
         f"{details_html}\n"
-        f"🔗 [View run logs & artifacts]({workflow_url})\n"
         f"{footer}\n"
         f"{hidden_marker}\n"
     )
