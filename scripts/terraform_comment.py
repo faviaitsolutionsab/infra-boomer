@@ -184,10 +184,7 @@ def main() -> None:
 
     header = f"## 📦 Terraform Plan for `{TF_ACTIONS_WORKING_DIR}` {marker_html}"
     summary = build_summary_md()
-    details_html = read_plan_details().rstrip()
-    # Ensure details_html ends with </details> (strip trailing whitespace for safety)
-    if not details_html.strip().endswith("</details>"):
-        details_html += "\n</details>"
+    details_html = ""  # no plan details, lint-style minimal comment
     footer = footer_md()
     # Compose body: header, summary, details, then metadata block outside details, then marker
     body = (
