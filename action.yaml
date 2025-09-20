@@ -1,5 +1,5 @@
-name: CloudSmith
-description: "PR runs: fmt, validate, plan, TFLint, Infracost (no PR comments by default). Merge: BASE/NEW plan, optional apply, per-folder cost JSON. Slack alerts only on merge failures. Optional success roll-up in a separate rollup mode."
+name: infra-boomer
+description: "Terraform CI/CD sidekick that lints, plans & tracks costs — always comes back with infra truth"
 author: faviaitsolutionab@gmail.com
 
 branding:
