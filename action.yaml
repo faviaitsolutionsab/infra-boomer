@@ -8,7 +8,7 @@ branding:
 
 inputs:
   mode:
-    description: '"pr" → lint/plan/cost; "merge" → per-folder plan/apply + cost JSON; "rollup" → aggregate JSON and optionally post success Slack.'
+    description: '"pr" → lint/plan/cost; "merge" → per-folder plan/apply + cost JSON; "rollup" → aggregate JSON and optionally post success Slack'
     required: true
     default: pr
 
