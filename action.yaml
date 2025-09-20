@@ -1,0 +1,592 @@
+name: CloudSmith
+description: "PR runs: fmt, validate, plan, TFLint, Infracost (no PR comments by default). Merge: BASE/NEW plan, optional apply, per-folder cost JSON. Slack alerts only on merge failures. Optional success roll-up in a separate rollup mode."
+author: faviaitsolutionab@gmail.com
+
+branding:
+  icon: cloud
+  color: orange
+
+inputs:
+  mode:
+    description: '"pr" → lint/plan/cost; "merge" → per-folder plan/apply + cost JSON; "rollup" → aggregate JSON and optionally post success Slack.'
+    required: true
+    default: pr
+
+  role_to_assume:
+    description: OIDC role ARN for AWS
+    required: false
+  aws_access_key_id:
+    description: AWS access key ID
+    required: false
+  aws_secret_access_key:
+    description: AWS secret access key
+    required: false
+  aws_region:
+    description: AWS region
+    default: eu-central-1
+    required: false
+
+  working_dir:
+    description: Terraform directory (matrix item)
+    required: true
+  terraform_version:
+    description: Version of Terraform to use
+    default: 1.x
+  terraform_fmt_skip:
+    description: Skip Terraform formatting checks
+    default: "true"
+  terraform_lock_timeout:
+    description: Terraform lock timeout
+    default: 20m
+  parallelism:
+    description: Terraform -parallelism
+    default: "4"
+  backend_config:
+    description: Value passed to `terraform init` as -backend-config=...
+    default: ""
+  terraform_apply:
+    description: In MERGE mode, apply the NEW plan when "true"
+    default: "false"
+
+  tflint_enable:
+    description: Enable TFLint in PR mode
+    default: "true"
+  tflint_config:
+    description: "Comma-separated repo paths to TFLint config; first existing wins. Falls back to CloudSmith baseline."
+    default: ""
+  tflint_version:
+    description: TFLint version
+    default: v0.58.1
+  tflint_create_comment:
+    description: Create/delete a PR comment with TFLint results
+    default: "true"
+
+  create_plan_comment:
+    description: Create a PR comment summarizing the Terraform plan
+    default: "true"
+  comment_marker:
+    description: De-dupe marker; falls back to working_dir when empty
+    default: ""
+
+  infracost_enable:
+    description: Enable Infracost (PR & MERGE)
+    default: "true"
+  infracost_version:
+    description: Infracost CLI version
+    default: latest
+  currency:
+    description: Currency for cost outputs (e.g., USD, EUR, SEK)
+    default: USD
+  mention_handles:
+    description: Space/comma-separated GitHub handles to mention in PR Infracost comment
+    default: ""
+  ping_author:
+    description: Mention PR author in the Infracost comment when true
+    default: "true"
+  infracost_comment_title:
+    description: Title for the Infracost PR comment
+    default: "💸 Infracost Report"
+  infracost_create_comment:
+    description: Post an Infracost PR comment (Base → New → Δ)
+    default: "true"
+
+  slack_error_notifications:
+    description: Post Slack message when MERGE mode fails
+    default: "true"
+  slack_bot_token:
+    description: Slack xoxb- token
+    required: false
+  slack_channel_id:
+    description: Slack channel ID
+    required: false
+
+  rollup_success_slack:
+    description: In ROLLUP mode, post one success Slack message
+    default: "false"
+  rollup_input_dir:
+    description: Directory containing per-folder infracost.rollup.json files
+    default: rollup
+
+runs:
+  using: composite
+  steps:
+    - name: Configure AWS (OIDC)
+      if: ${{ inputs.role_to_assume != '' && inputs.aws_access_key_id == '' }}
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        role-to-assume: ${{ inputs.role_to_assume }}
+        aws-region: ${{ inputs.aws_region }}
+
+    - name: Configure AWS (static keys)
+      if: ${{ inputs.aws_access_key_id != '' && inputs.role_to_assume == '' }}
+      shell: bash
+      run: |
+        echo "AWS_ACCESS_KEY_ID=${{ inputs.aws_access_key_id }}" >> $GITHUB_ENV
+        echo "AWS_SECRET_ACCESS_KEY=${{ inputs.aws_secret_access_key }}" >> $GITHUB_ENV
+        echo "AWS_DEFAULT_REGION=${{ inputs.aws_region }}" >> $GITHUB_ENV
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+        terraform_wrapper: false
+
+    - name: Init Terraform CLI cache (HOME-proof)
+      shell: bash
+      run: |
+        CACHE_DIR="${RUNNER_TEMP}/terraform-plugin-cache"
+        mkdir -p "$CACHE_DIR"
+        echo "TF_PLUGIN_CACHE_DIR=$CACHE_DIR" >> "$GITHUB_ENV"
+        printf 'plugin_cache_dir = "%s"\n' "$CACHE_DIR" > "$HOME/.terraformrc"
+
+    - name: Terraform environment
+      shell: bash
+      run: |
+        echo "TF_IN_AUTOMATION=1" >> $GITHUB_ENV
+        echo "TF_CLI_ARGS=-no-color" >> $GITHUB_ENV
+        if [[ -n "${{ inputs.backend_config }}" ]]; then
+          echo "BACKEND_CONFIG=-backend-config=${{ inputs.backend_config }}" >> $GITHUB_ENV
+        fi
+        if [[ -z "${{ inputs.comment_marker }}" ]]; then
+          echo "PR_COMMENT_MARKER=${{ inputs.working_dir }}" >> $GITHUB_ENV
+        else
+          echo "PR_COMMENT_MARKER=${{ inputs.comment_marker }}" >> $GITHUB_ENV
+        fi
+        echo "TF_ACTIONS_WORKING_DIR=${{ inputs.working_dir }}" >> $GITHUB_ENV
+
+    - name: Setup TFLint
+      if: ${{ inputs.mode == 'pr' && inputs.tflint_enable == 'true' }}
+      uses: terraform-linters/setup-tflint@v5
+      with:
+        tflint_version: ${{ inputs.tflint_version }}
+        tflint_wrapper: false
+
+    - name: Init TFLint
+      if: ${{ inputs.mode == 'pr' && inputs.tflint_enable == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        CANDIDATES=()
+        if [[ -n "${{ inputs.tflint_config }}" ]]; then
+          IFS=',' read -r -a USER_CFGS <<< "${{ inputs.tflint_config }}"
+          for p in "${USER_CFGS[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [[ -n "$p" ]] && CANDIDATES+=("$GITHUB_WORKSPACE/$p")
+          done
+        fi
+        CANDIDATES+=("$GITHUB_WORKSPACE/${{ inputs.working_dir }}/.tflint.hcl")
+        CANDIDATES+=("$GITHUB_WORKSPACE/.tflint.hcl")
+        CANDIDATES+=("$GITHUB_ACTION_PATH/defaults/.tflint.hcl")
+        CFG=""
+        for c in "${CANDIDATES[@]}"; do
+          if [[ -f "$c" ]]; then CFG="$c"; break; fi
+        done
+        echo "Using TFLint config: $CFG"
+        tflint --chdir="${{ inputs.working_dir }}" --init -c "$CFG"
+
+    - name: Run TFLint
+      if: ${{ inputs.mode == 'pr' && inputs.tflint_enable == 'true' }}
+      id: tflint
+      shell: bash
+      run: |
+        set -o pipefail
+        CANDIDATES=()
+        if [[ -n "${{ inputs.tflint_config }}" ]]; then
+          IFS=',' read -r -a USER_CFGS <<< "${{ inputs.tflint_config }}"
+          for p in "${USER_CFGS[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [[ -n "$p" ]] && CANDIDATES+=("$GITHUB_WORKSPACE/$p")
+          done
+        fi
+        CANDIDATES+=("$GITHUB_WORKSPACE/${{ inputs.working_dir }}/.tflint.hcl")
+        CANDIDATES+=("$GITHUB_WORKSPACE/.tflint.hcl")
+        CANDIDATES+=("$GITHUB_ACTION_PATH/defaults/.tflint.hcl")
+        for c in "${CANDIDATES[@]}"; do
+          if [[ -f "$c" ]]; then CFG="$c"; break; fi
+        done
+        set +e
+        tflint --chdir="${{ inputs.working_dir }}" -f compact -c "$CFG" | tee tflint.out
+        CODE=$?
+        set -e
+        echo "exitcode=$CODE" >> $GITHUB_OUTPUT
+        echo "stdout<<EOF" >> $GITHUB_OUTPUT
+        cat tflint.out >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Terraform fmt (PR)
+      if: ${{ inputs.mode == 'pr' && inputs.terraform_fmt_skip == 'false' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" fmt -check -diff
+
+    - name: Terraform init (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" init $BACKEND_CONFIG
+
+    - name: Terraform validate (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" validate
+
+    - name: Terraform plan (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" plan -out tfplan -lock-timeout="${{ inputs.terraform_lock_timeout }}" -parallelism=${{ inputs.parallelism }} |& tee output.txt
+
+    - name: Terraform show → tfplan.json (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" show -json tfplan > "${{ inputs.working_dir }}/tfplan.json"
+
+    - name: Checkout PR base into __base
+      if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' }}
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: __base
+
+    - name: Terraform init/plan/show (BASE, PR; refresh=false)
+      if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      env:
+        CURRENCY: ${{ inputs.currency }}
+      run: |
+        BASE_DIR="__base/${{ inputs.working_dir }}"
+        if [[ -d "$BASE_DIR" ]]; then
+          terraform -chdir="$BASE_DIR" init $BACKEND_CONFIG
+          terraform -chdir="$BASE_DIR" plan -refresh=false -lock=false -parallelism=${{ inputs.parallelism }} -out tfplan
+          terraform -chdir="$BASE_DIR" show -json tfplan > "$BASE_DIR/tfplan.json"
+          echo "PR_BASE_PRESENT=true" >> $GITHUB_ENV
+        else
+          echo "Base dir missing ($BASE_DIR). New folder in PR ➜ zero-cost baseline."
+          mkdir -p "$BASE_DIR"
+          # Robust: generate the zero-cost baseline JSON with jq (no heredoc pitfalls)
+          jq -n \
+            --arg currency "$CURRENCY" \
+            '{
+              version: "0.2",
+              projects: [],
+              currency: $currency,
+              summary: {
+                pastTotalMonthlyCost: "0",
+                totalMonthlyCost: "0",
+                diffTotalMonthlyCost: "0"
+              }
+            }' > "$BASE_DIR/.infracost-base.json"
+          echo "PR_BASE_PRESENT=false" >> "$GITHUB_ENV"
+        fi
+
+    - name: Install Infracost (PR)
+      if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      run: |
+        if [ "${{ inputs.infracost_version }}" = "latest" ]; then
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+        else
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh -s -- -v "${{ inputs.infracost_version }}"
+        fi
+
+    - name: Build Infracost diff (PR)
+      if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      env:
+        INFRACOST_API_KEY: ${{ env.INFRACOST_API_KEY }}
+        INFRACOST_CURRENCY: ${{ inputs.currency }}
+      run: |
+        PR_DIR="${{ inputs.working_dir }}"
+        BASE_DIR="__base/${{ inputs.working_dir }}"
+        # Ensure compare-to file exists even for brand-new folders
+        if [[ "${PR_BASE_PRESENT:-false}" = "true" ]]; then
+          infracost breakdown --path "$BASE_DIR/tfplan.json" --format json --out-file "$PR_DIR/.infracost-base.json"
+        else
+          # Zero-cost baseline for PRs introducing a new folder
+          jq -n \
+            --arg currency "${INFRACOST_CURRENCY:-USD}" \
+            '{
+              version: "0.2",
+              projects: [],
+              currency: $currency,
+              summary: {
+                pastTotalMonthlyCost: "0",
+                totalMonthlyCost: "0",
+                diffTotalMonthlyCost: "0"
+              }
+            }' > "$PR_DIR/.infracost-base.json"
+        fi
+
+        # Current PR plan cost
+        infracost breakdown --path "$PR_DIR/tfplan.json" --format json --out-file "$PR_DIR/.infracost-pr.json"
+
+        # Diff: PR vs Base (or zero baseline)
+        infracost diff \
+          --path "$PR_DIR/.infracost-pr.json" \
+          --compare-to "$PR_DIR/.infracost-base.json" \
+          --format json \
+          --out-file "$PR_DIR/infracost.out.json"
+
+    - name: Setup Python (PR artifacts)
+      if: ${{ inputs.mode == 'pr' && (inputs.create_plan_comment == 'true' || (inputs.tflint_enable == 'true' && inputs.tflint_create_comment == 'true') || (inputs.infracost_enable == 'true' && inputs.infracost_create_comment == 'true')) }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+
+    - name: pip install requests
+      if: ${{ inputs.mode == 'pr' && (inputs.create_plan_comment == 'true' || (inputs.tflint_enable == 'true' && inputs.tflint_create_comment == 'true') || (inputs.infracost_enable == 'true' && inputs.infracost_create_comment == 'true')) }}
+      shell: bash
+      run: python -m pip install --upgrade pip && pip install --no-cache-dir requests
+    - name: PR comment — Terraform plan
+      if: ${{ inputs.mode == 'pr' && inputs.create_plan_comment == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PR_COMMENT_MARKER: "${{ env.PR_COMMENT_MARKER }}"
+        CREATE_COMMENT: "true"
+        TERRAFORM_APPLY: "false"
+        TF_STATUS: "0"
+        PLAN_SUMMARY_LABELS: "true"
+        WORKING_DIR: ${{ inputs.working_dir }}
+        TF_ACTIONS_WORKING_DIR: ${{ inputs.working_dir }}
+      run: |
+        set -euo pipefail
+        FILE="${{ inputs.working_dir }}/tfplan.json"
+
+        if [ -f "$FILE" ]; then
+          ADD=$(jq '[.resource_changes[]? | select(.change.actions[]? == "create")] | length' "$FILE")
+          CHANGE=$(jq '[.resource_changes[]? | select(.change.actions[]? == "update")] | length' "$FILE")
+          DESTROY=$(jq '[.resource_changes[]? | select(.change.actions[]? == "delete")] | length' "$FILE")
+        elif [ -f "output.txt" ]; then
+          LINE=$(grep -Eo 'Plan:[^.]+' output.txt || true)
+          ADD=$(sed -n 's/.*Plan: \([0-9]\+\) to add.*/\1/p' <<<"$LINE")
+          CHANGE=$(sed -n 's/.*to add, \([0-9]\+\) to change.*/\1/p' <<<"$LINE")
+          DESTROY=$(sed -n 's/.*to change, \([0-9]\+\) to destroy.*/\1/p' <<<"$LINE")
+        else
+          ADD=0; CHANGE=0; DESTROY=0
+        fi
+
+        export TF_ADD_COUNT="${ADD:-0}"
+        export TF_CHANGE_COUNT="${CHANGE:-0}"
+        export TF_DESTROY_COUNT="${DESTROY:-0}"
+
+        echo "TF_ADD_COUNT=$TF_ADD_COUNT" >> $GITHUB_ENV
+        echo "TF_CHANGE_COUNT=$TF_CHANGE_COUNT" >> $GITHUB_ENV
+        echo "TF_DESTROY_COUNT=$TF_DESTROY_COUNT" >> $GITHUB_ENV
+
+        python "${{ github.action_path }}/scripts/terraform_comment.py"
+
+
+    - name: PR comment — TFLint (add/delete)
+      if: ${{ inputs.mode == 'pr' && inputs.tflint_enable == 'true' && inputs.tflint_create_comment == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PR_COMMENT_MARKER: "${{ env.PR_COMMENT_MARKER }}"
+        TFLINT_OUTPUT: "${{ steps.tflint.outputs.stdout }}"
+        PR_DELETE_COMMENT: ${{ steps.tflint.outputs.exitcode == '0' && 'true' || 'false' }}
+      run: python "${{ github.action_path }}/scripts/terraform_lint_comment.py"
+
+    - name: Build Infracost comment markdown
+      if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' && inputs.infracost_create_comment == 'true' }}
+      shell: bash
+      env:
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        MENTION_HANDLES: ${{ inputs.mention_handles }}
+        INPUT_COMMENT_MARKER: "<!-- infracost-comment:${{ inputs.working_dir }} -->"
+        INFRACOST_CURRENCY: ${{ inputs.currency }}
+        INFRACOST_WD: ${{ inputs.working_dir }}
+        PING_AUTHOR: ${{ inputs.ping_author }}
+        PING_MENTIONS: ${{ inputs.ping_author }}
+        COMMENT_TITLE: ${{ inputs.infracost_comment_title }}
+      run: |
+        # Let the Python script decide whether to add the "New folder" badge to avoid duplication.
+        export COMMENT_TITLE="💸 Infracost Report for ${INFRACOST_WD}"
+        python "${{ github.action_path }}/scripts/infracost_comment.py" "${{ inputs.working_dir }}/infracost.out.json" "${{ inputs.working_dir }}/infracost_comment.md"
+
+    - name: Upsert PR comment — Infracost
+      if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' && inputs.infracost_create_comment == 'true' }}
+      uses: actions/github-script@v7
+      env:
+        WD: ${{ inputs.working_dir }}
+      with:
+        script: |
+          const fs = require('fs'), path = require('path');
+          const { owner, repo } = context.repo;
+          const pr = context.payload.pull_request; if (!pr) return;
+          const issue_number = pr.number;
+          const body = fs.readFileSync(path.join(process.env.WD, 'infracost_comment.md'), 'utf8');
+          const marker = `<!-- infracost-comment:${process.env.WD} -->`;
+          const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+          const existing = comments.find(c => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+
+    - name: Prepare BASE (HEAD~1)
+      if: ${{ inputs.mode == 'merge' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      run: |
+        BASE_DIR="__base/${{ inputs.working_dir }}"
+        mkdir -p "$BASE_DIR"
+        if git cat-file -e HEAD~1:"${{ inputs.working_dir }}" 2>/dev/null; then
+          git --no-pager checkout HEAD~1 -- "${{ inputs.working_dir }}" || true
+          rsync -a "${{ inputs.working_dir }}/" "$BASE_DIR/" || true
+          echo "MERGE_BASE_PRESENT=true" >> $GITHUB_ENV
+        else
+          echo "Folder did not exist in HEAD~1 ➜ zero-cost baseline for merge."
+          echo "MERGE_BASE_PRESENT=false" >> $GITHUB_ENV
+          mkdir -p "$BASE_DIR"
+          : > "$BASE_DIR/.placeholder"
+        fi
+
+    - name: Terraform init/plan/show (BASE, refresh=false)
+      if: ${{ inputs.mode == 'merge' && inputs.infracost_enable == 'true' && env.MERGE_BASE_PRESENT == 'true' }}
+      shell: bash
+      run: |
+        BASE_DIR="__base/${{ inputs.working_dir }}"
+        terraform -chdir="$BASE_DIR" init $BACKEND_CONFIG
+        terraform -chdir="$BASE_DIR" plan -refresh=false -lock=false -parallelism=${{ inputs.parallelism }} -out tfplan
+        terraform -chdir="$BASE_DIR" show -json tfplan > "$BASE_DIR/tfplan.json"
+
+    - name: Terraform init/plan/show (NEW)
+      if: ${{ inputs.mode == 'merge' }}
+      shell: bash
+      run: |
+        terraform -chdir="${{ inputs.working_dir }}" init $BACKEND_CONFIG
+        terraform -chdir="${{ inputs.working_dir }}" plan -lock=false -parallelism=${{ inputs.parallelism }} -out tfplan
+        terraform -chdir="${{ inputs.working_dir }}" show -json tfplan > "${{ inputs.working_dir }}/tfplan.json"
+
+    - name: Terraform apply (NEW)
+      if: ${{ inputs.mode == 'merge' && inputs.terraform_apply == 'true' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" apply -auto-approve -lock-timeout="${{ inputs.terraform_lock_timeout }}" tfplan |& tee output.txt
+
+    - name: Install Infracost (merge)
+      if: ${{ inputs.mode == 'merge' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      run: |
+        if [ "${{ inputs.infracost_version }}" = "latest" ]; then
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+        else
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh -s -- -v "${{ inputs.infracost_version }}"
+        fi
+
+    - name: Build Infracost diff (merge)
+      if: ${{ inputs.mode == 'merge' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      env:
+        INFRACOST_API_KEY: ${{ env.INFRACOST_API_KEY }}
+      run: |
+        DIR='${{ inputs.working_dir }}'
+        BASE="__base/${{ inputs.working_dir }}"
+        if [[ "${MERGE_BASE_PRESENT:-false}" = "true" ]]; then
+          infracost breakdown --path "$BASE/tfplan.json" --format json --out-file "$DIR/.infracost-base.json"
+        else
+          # Robust: zero-cost baseline when base folder didn't exist at HEAD~1
+          jq -n \
+            --arg currency "${{ inputs.currency }}" \
+            '{
+              version: "0.2",
+              projects: [],
+              currency: $currency,
+              summary: {
+                pastTotalMonthlyCost: "0",
+                totalMonthlyCost: "0",
+                diffTotalMonthlyCost: "0"
+              }
+            }' > "$DIR/.infracost-base.json"
+        fi
+        infracost breakdown --path "$DIR/tfplan.json"  --format json --out-file "$DIR/.infracost-new.json"
+        infracost diff --path "$DIR/.infracost-new.json" --compare-to "$DIR/.infracost-base.json" --format json --out-file "$DIR/infracost.out.json"
+
+    - name: Emit per-folder roll-up JSON (merge)
+      if: ${{ inputs.mode == 'merge' && inputs.infracost_enable == 'true' }}
+      shell: bash
+      run: |
+        OUT="${{ inputs.working_dir }}/infracost.out.json"
+        mkdir -p "${{ inputs.working_dir }}"
+        jq -n \
+          --arg folder "${{ inputs.working_dir }}" \
+          --argjson data "$(cat "$OUT")" \
+          '{
+            folder: $folder,
+            currency: ($data.currency // "USD"),
+            base: ($data.summary.pastTotalMonthlyCost // 0 | tonumber),
+            new: ($data.summary.totalMonthlyCost // 0 | tonumber),
+            delta: ($data.summary.diffTotalMonthlyCost // ($data.summary.totalMonthlyCost - $data.summary.pastTotalMonthlyCost) | tonumber)
+          }' > "${{ inputs.working_dir }}/infracost.rollup.json"
+
+    - name: Slack error (merge only)
+      if: ${{ failure() && inputs.mode == 'merge' && inputs.slack_error_notifications == 'true' && inputs.slack_bot_token != '' && inputs.slack_channel_id != '' }}
+      uses: slackapi/slack-github-action@v2
+      with:
+        token: ${{ inputs.slack_bot_token }}
+        method: chat.postMessage
+        payload: |
+          {
+            "channel":"${{ inputs.slack_channel_id }}",
+            "text":"Terraform MERGE job failed",
+            "blocks":[
+              {"type":"section","text":{"type":"mrkdwn","text":":warning: *Terraform failure on merge*\n*Folder:* `${{ inputs.working_dir }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"}},
+              {"type":"divider"},
+              {"type":"section","fields":[
+                {"type":"mrkdwn","text":"*Commit*"},{"type":"mrkdwn","text":"*Actor*"},
+                {"type":"mrkdwn","text":"<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"},
+                {"type":"mrkdwn","text":"${{ github.actor }}"}
+              ]}
+            ]
+          }
+
+    - name: Aggregate roll-up from JSON files
+      if: ${{ inputs.mode == 'rollup' && inputs.rollup_success_slack == 'true' }}
+      shell: bash
+      run: |
+        shopt -s nullglob
+        files=("${{ inputs.rollup_input_dir }}"/*.json)
+        if (( ${#files[@]} == 0 )); then
+          echo "HAS_ROLLUP=false" >> $GITHUB_ENV
+          exit 0
+        fi
+        total_base=0 total_new=0 total_delta=0 currency="${{ inputs.currency }}" lines=""
+        for f in "${files[@]}"; do
+          folder=$(jq -r '.folder' "$f")
+          base=$(jq -r '.base' "$f")
+          new=$(jq -r '.new' "$f")
+          delta=$(jq -r '.delta' "$f")
+          currency=$(jq -r '.currency // "'"${{ inputs.currency }}"'"' "$f")
+          total_base=$(python -c "print(float('${total_base:-0}') + float('${base:-0}'))")
+          total_new=$(python -c "print(float('${total_new:-0}') + float('${new:-0}'))")
+          total_delta=$(python -c "print(float('${total_delta:-0}') + float('${delta:-0}'))")
+          lines+="• \`${folder}\`: base ${base} → new ${new} (Δ ${delta})\n"
+        done
+        echo "HAS_ROLLUP=true" >> $GITHUB_ENV
+        printf "CURRENCY=%s\nBASE=%s\nNEW=%s\nDELTA=%s\nLINES<<EOF\n%s\nEOF\n" "$currency" "$total_base" "$total_new" "$total_delta" "$lines" >> $GITHUB_ENV
+
+    - name: Slack success (roll-up)
+      if: ${{ inputs.mode == 'rollup' && env.HAS_ROLLUP == 'true' && inputs.rollup_success_slack == 'true' && inputs.slack_bot_token != '' && inputs.slack_channel_id != '' }}
+      uses: slackapi/slack-github-action@v2
+      with:
+        token: ${{ inputs.slack_bot_token }}
+        method: chat.postMessage
+        payload: |
+          {
+            "channel": "${{ inputs.slack_channel_id }}",
+            "text": "Cost roll-up after merge to `${{ github.ref_name }}`",
+            "blocks": [
+              { "type": "section", "text": { "type": "mrkdwn",
+                  "text": "*Merge to* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|View commit>" } },
+              { "type": "divider" },
+              { "type": "section", "fields": [
+                  { "type": "mrkdwn", "text": "*Currency*" },
+                  { "type": "mrkdwn", "text": "${{ env.CURRENCY }}" },
+                  { "type": "mrkdwn", "text": "*Base monthly*" },
+                  { "type": "mrkdwn", "text": "${{ env.BASE }}" },
+                  { "type": "mrkdwn", "text": "*New monthly*" },
+                  { "type": "mrkdwn", "text": "${{ env.NEW }}" },
+                  { "type": "mrkdwn", "text": "*Delta*" },
+                  { "type": "mrkdwn", "text": "${{ env.DELTA }}" }
+              ] },
+              { "type": "divider" },
+              { "type": "section", "text": { "type": "mrkdwn", "text": "*Per-folder*\n${{ env.LINES }}" } }
+            ]
+          }

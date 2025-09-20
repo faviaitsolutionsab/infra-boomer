@@ -1,0 +1,30 @@
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 1.0.0
+        required: true
+jobs:
+  cut:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag version
+        run: |
+          v="v${{ inputs.version }}"
+          git tag "$v"
+          git push origin "$v"
+      - name: Move major tag
+        run: |
+          v="${{ inputs.version }}"
+          major="v${v%%.*}"
+          git tag -f "$major" "v${v}"
+          git push -f origin "$major"
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          generate_release_notes: true

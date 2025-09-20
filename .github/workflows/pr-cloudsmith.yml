@@ -1,0 +1,71 @@
+name: PR — CloudSmith (self-test)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ main ]
+    paths:
+      - "examples/**/terraform/**"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # If we later add more demo folders, this matrix will Just Work™
+  get_changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      any_changed: ${{ steps.changed.outputs.any_changed }}
+      all_changed_dirs: ${{ steps.changed.outputs.all_changed_files }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          dir_names: true
+          matrix: true
+          dir_names_max_depth: 3
+          files: |
+            examples/demo/terraform/**
+            examples/demo1/terraform/**
+            examples/demo2/terraform/**
+          files_ignore: |
+            **/*.md
+
+  pr_per_dir:
+    if: needs.get_changes.outputs.any_changed == 'true'
+    needs: [get_changes]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        folder: ${{ fromJson(needs.get_changes.outputs.all_changed_dirs) }}
+    # Infracost is optional for this PR test; enable if you have a key
+    env:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: CloudSmith (PR mode)
+        uses: ./
+        with:
+          mode: pr
+          # No OIDC or AWS creds needed for this demo stack
+          working_dir: ${{ matrix.folder }}
+          terraform_version: "1.13.1"
+
+          # Lint: ON (uses action's built-in baseline unless repo config is present)
+          tflint_enable: "true"
+          
+          create_plan_comment: "true"
+          comment_marker: "<!-- tf-plan:${{ matrix.folder }} -->"
+
+          # Cost: set to "false" unless you've added a real key to repo secrets
+          infracost_enable: ${{ secrets.INFRACOST_API_KEY != '' && 'true' || 'false' }}
+          currency: "USD"
