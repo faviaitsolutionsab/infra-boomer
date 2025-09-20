@@ -18,7 +18,7 @@ provider "aws" {
 
 variable "size_gb" {
   type    = number
-  default = 11
+  default = 10
 }
 
 resource "aws_ebs_volume" "test" {
@@ -33,4 +33,8 @@ resource "aws_ebs_volume" "test" {
 variable "not_used" {
   type    = string
   default = "hello"
+}
+
+variable "no_type" {
+  default = "no_type"
 }

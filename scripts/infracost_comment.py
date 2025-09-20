@@ -100,6 +100,8 @@ else:
 
 # Guard clause: skip comment if delta is very close to zero
 if abs(delta) < 0.01:
+    if os.getenv("INFRACOST_SILENT_SKIP", "").lower() in ("1","true","yes"):
+        sys.exit(0)
     print("::notice::Infracost delta is zero → skipping PR comment.")
     sys.exit(0)
 
