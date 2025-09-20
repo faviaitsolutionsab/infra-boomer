@@ -132,7 +132,7 @@ def _extract_plan_only(text: str) -> str:
             break
     return "\n".join(lines[start:]).strip()
 
-def read_plan_details(footer: str = "") -> str:
+def read_plan_details() -> str:
     # Prefer the human-readable show output we write explicitly
     plan_txt = Path(TF_ACTIONS_WORKING_DIR) / "plan.txt"
     if plan_txt.exists():
@@ -142,7 +142,6 @@ def read_plan_details(footer: str = "") -> str:
             "<details>\n"
             "<summary>📖 Details (Click me)</summary>\n\n"
             "```terraform\n" + body + "\n``""\n\n"
-            f"{footer}"
             "</details>\n"
         )
     # Fallback: old behavior using output.txt (may contain init noise)
@@ -154,13 +153,11 @@ def read_plan_details(footer: str = "") -> str:
             "<details>\n"
             "<summary>📖 Details (Click me)</summary>\n\n"
             "```terraform\n" + body + "\n``""\n\n"
-            f"{footer}"
             "</details>\n"
         )
     return (
         "<details>\n<summary>📖 Details (Click me)</summary>\n\n"
         "_Not available._\n\n"
-        f"{footer}"
         "</details>\n"
     )
 
@@ -186,9 +183,9 @@ def main() -> None:
     header = f"## 📦 Terraform Plan for `{TF_ACTIONS_WORKING_DIR}` {marker_html}"
     summary = build_summary_md()
     footer = footer_md()
-    details_html = read_plan_details(footer)
-    # `details_html` now includes the footer, so do not append it again
-    body = f"{header}\n\n{summary}\n{details_html}\n{marker_html}\n"
+    details_html = read_plan_details()
+    # Compose body: header, summary, details, footer, marker
+    body = f"{header}\n\n{summary}\n{details_html}\n{footer}\n{marker_html}\n"
 
     print(f"::notice::Upserting Terraform plan PR comment for {TF_ACTIONS_WORKING_DIR} with marker {marker_html}")
     existing_id = find_existing_comment_id(pr_number, marker_html)
