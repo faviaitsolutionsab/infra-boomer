@@ -1,0 +1,75 @@
+name: Merge (apply + cost)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "examples/**/terraform/**"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  get_changes:
+    name: Detect changed Terraform dirs
+    runs-on: ubuntu-24.04
+    outputs:
+      any_changed: ${{ steps.changed.outputs.any_changed }}
+      all_changed_dirs: ${{ steps.changed.outputs.all_changed_files }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: changed
+        uses: tj-actions/changed-files@v47
+        with:
+          dir_names: true
+          matrix: true
+          dir_names_max_depth: 3
+          files: |
+            examples/demo/terraform/**
+            examples/demo1/terraform/**
+            examples/demo2/terraform/**
+          files_ignore: |
+            **/*.md
+
+  merge_per_dir:
+    name: Apply per folder
+    if: needs.get_changes.outputs.any_changed == 'true'
+    needs: [get_changes]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        folder: ${{ fromJson(needs.get_changes.outputs.all_changed_dirs) }}
+    env:
+      # Optional: Infracost. Leave empty to skip cost JSONs.
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # 🔧 Run the composite action in MERGE mode
+      - name: infra-boomer (merge)
+        uses: ./
+        with:
+          mode: merge
+          working_dir: ${{ matrix.folder }}
+          terraform_version: "1.13.1"
+
+          # ✅ Apply on merge (flip to "false" for dry-run)
+          terraform_apply: "true"
+
+          # 💸 Cost (optional; requires secret). If empty, cost JSONs are skipped.
+          infracost_enable: ${{ secrets.INFRACOST_API_KEY != '' && 'true' || 'false' }}
+          currency: "USD"
+
+          # Slack failure pings (optional)
+          slack_error_notifications: "true"
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}

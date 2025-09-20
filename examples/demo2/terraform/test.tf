@@ -10,5 +10,5 @@ resource "local_file" "b" {
 
 resource "local_sensitive_file" "test" {
   filename = "${path.module}/example.txt"
-  content  = "Hello"
+  content  = "Hello!"
 }
