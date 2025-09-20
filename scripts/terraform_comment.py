@@ -189,11 +189,11 @@ def main() -> None:
     if not details_html.strip().endswith("</details>"):
         details_html += "\n</details>"
     footer = footer_md()
-    # Compose body: header, summary, details, then footer outside details
+    # Compose body: header, summary, details, then metadata block outside details, then marker
     body = (
         f"{header}\n\n"
         f"{summary}\n"
-        f"{details_html}\n\n"
+        f"{details_html}\n"
         f"{footer}\n"
     )
 
