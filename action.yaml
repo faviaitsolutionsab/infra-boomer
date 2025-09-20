@@ -238,6 +238,11 @@ runs:
       shell: bash
       run: terraform -chdir="${{ inputs.working_dir }}" show -json tfplan > "${{ inputs.working_dir }}/tfplan.json"
 
+    - name: Terraform show (human) → plan.txt (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" show tfplan > "${{ inputs.working_dir }}/plan.txt"
+
     - name: Checkout PR base into __base
       if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' }}
       uses: actions/checkout@v5

@@ -121,17 +121,39 @@ def build_summary_md() -> str:
         "✅ **Plan succeeded**\n"
     )
 
+
+def _extract_plan_only(text: str) -> str:
+    # Keep only the plan body, drop any init noise if present
+    lines = text.splitlines()
+    start = 0
+    for i, l in enumerate(lines):
+        if "Terraform used the selected providers to generate the following execution" in l:
+            start = i
+            break
+    return "\n".join(lines[start:]).strip()
+
 def read_plan_details() -> str:
+    # Prefer the human-readable show output we write explicitly
+    plan_txt = Path(TF_ACTIONS_WORKING_DIR) / "plan.txt"
+    if plan_txt.exists():
+        text = plan_txt.read_text(encoding="utf-8", errors="replace")
+        body = _extract_plan_only(text)
+        return (
+            "<details>\n"
+            "<summary>📖 Details (Click me)</summary>\n\n"
+            "```terraform\n" + body + "\n``""\n\n"
+            "</details>\n"
+        )
+    # Fallback: old behavior using output.txt (may contain init noise)
     out_txt = Path("output.txt")
     if out_txt.exists():
         text = out_txt.read_text(encoding="utf-8", errors="replace")
+        body = _extract_plan_only(text)
         return (
-          "<details>\n"
-          "<summary>📖 Details (Click me)</summary>\n\n"
-          "```terraform\n"
-          f"{text.strip()}\n"
-          "```\n\n"
-          "</details>\n"
+            "<details>\n"
+            "<summary>📖 Details (Click me)</summary>\n\n"
+            "```terraform\n" + body + "\n``""\n\n"
+            "</details>\n"
         )
     return "<details>\n<summary>📖 Details (Click me)</summary>\n\n_Not available._\n\n</details>\n"
 
