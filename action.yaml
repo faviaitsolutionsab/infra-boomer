@@ -414,18 +414,32 @@ runs:
           if (!pr) { core.notice('No PR context; skipping Infracost comment.'); return; }
           const issue_number = pr.number;
           const file = path.join(process.env.WD, 'infracost_comment.md');
+          const marker = `<!-- infracost-comment:${process.env.WD} -->`;
+
+          // If no file (e.g., zero delta + silent skip), remove any existing comment and exit.
           if (!fs.existsSync(file)) {
-            core.notice('Infracost delta was zero or comment generation skipped — no comment file found, skipping.');
+            core.notice('Infracost delta was zero or comment generation skipped — no comment file found.');
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+              core.notice(`Deleted existing Infracost comment (id=${existing.id}).`);
+            } else {
+              core.notice('No existing Infracost comment to delete.');
+            }
             return;
           }
+
+          // Otherwise, upsert the comment.
           const body = fs.readFileSync(file, 'utf8');
-          const marker = `<!-- infracost-comment:${process.env.WD} -->`;
           const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
           const existing = comments.find(c => c.body && c.body.includes(marker));
           if (existing) {
             await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            core.notice(`Updated Infracost comment (id=${existing.id}).`);
           } else {
             await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            core.notice('Created Infracost comment.');
           }
 
     - name: Prepare BASE (HEAD~1)
