@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0
       - uses: tj-actions/auto-doc@v3
         with:
-          filename: action.yml
+          filename: action.yaml
           output: README.md
           reusable: false
       - uses: stefanzweifel/git-auto-commit-action@v5
@@ -36,7 +36,7 @@ jobs:
           fetch-depth: 0
       - uses: tj-actions/auto-doc@v3
         with:
-          filename: action.yml
+          filename: action.yaml
           output: README.md
           reusable: false
       - run: git diff --exit-code
