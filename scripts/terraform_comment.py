@@ -78,10 +78,12 @@ def list_all_comments(pr_number: int) -> List[dict]:
         page += 1
     return comments
 
-def find_existing_comment_id(pr_number: int, marker_html: str) -> Optional[int]:
+def find_existing_comment_id(pr_number: int, working_dir: str) -> Optional[int]:
+    # Look for our hidden marker in the comment body
+    hidden_marker = f"<!-- tf-plan:{working_dir} -->"
     for c in list_all_comments(pr_number):
         body = (c.get("body") or "")
-        if marker_html in body:
+        if hidden_marker in body:
             return c["id"]
     return None
 
@@ -99,14 +101,18 @@ def workflow_url() -> str:
     return f"https://github.com/{REPO_OWNER_FOR_URL}/{REPO_NAME}/actions/runs/{RUN_ID}"
 
 def footer_md() -> str:
-    return (
-        "\n---\n"
-        f"🧑‍💻 **Actor**: @{GITHUB_ACTOR}\n"
-        f"⚙️ **Event**: {EVENT_NAME}\n"
-        f"📂 **Working Dir**: `{TF_ACTIONS_WORKING_DIR}`\n"
-        f"🏗️ **Workflow**: {GITHUB_WORKFLOW}\n"
-        f"🔗 **Run Logs**: [View here]({workflow_url()})\n"
-    )
+    run_url = workflow_url()
+    lines = [
+        "\n---\n",
+        f"🧑‍💻 **Actor**: @{GITHUB_ACTOR}\n",
+        f"📂 **Dir**: `{TF_ACTIONS_WORKING_DIR}`\n",
+        f"🔗 **Run**: [logs]({run_url})\n",
+    ]
+    if GITHUB_SHA:
+        commit_url = f"{os.environ.get('GITHUB_SERVER_URL','https://github.com')}/{REPO_OWNER_FOR_URL}/{REPO_NAME}/commit/{GITHUB_SHA}"
+        short = GITHUB_SHA[:7]
+        lines.append(f"🔧 **Commit**: [{short}]({commit_url})\n")
+    return "".join(lines)
 
 def build_summary_md() -> str:
     return (
@@ -117,19 +123,45 @@ def build_summary_md() -> str:
         "✅ **Plan succeeded**\n"
     )
 
+
+def _extract_plan_only(text: str) -> str:
+    # Keep only the plan body, drop any init noise if present
+    lines = text.splitlines()
+    start = 0
+    for i, l in enumerate(lines):
+        if "Terraform used the selected providers to generate the following execution" in l:
+            start = i
+            break
+    return "\n".join(lines[start:]).strip()
+
 def read_plan_details() -> str:
+    # Prefer the human-readable show output we write explicitly
+    plan_txt = Path(TF_ACTIONS_WORKING_DIR) / "plan.txt"
+    if plan_txt.exists():
+        text = plan_txt.read_text(encoding="utf-8", errors="replace")
+        body = _extract_plan_only(text)
+        return (
+            "<details>\n"
+            "<summary>📖 Details (Click me)</summary>\n\n"
+            "```terraform\n" + body + "\n``""\n\n"
+            "</details>\n"
+        )
+    # Fallback: old behavior using output.txt (may contain init noise)
     out_txt = Path("output.txt")
     if out_txt.exists():
         text = out_txt.read_text(encoding="utf-8", errors="replace")
+        body = _extract_plan_only(text)
         return (
-          "<details>\n"
-          "<summary>📖 Details (Click me)</summary>\n\n"
-          "```terraform\n"
-          f"{text.strip()}\n"
-          "```\n\n"
-          "</details>\n"
+            "<details>\n"
+            "<summary>📖 Details (Click me)</summary>\n\n"
+            "```terraform\n" + body + "\n``""\n\n"
+            "</details>\n"
         )
-    return "<details>\n<summary>📖 Details (Click me)</summary>\n\n_Not available._\n\n</details>\n"
+    return (
+        "<details>\n<summary>📖 Details (Click me)</summary>\n\n"
+        "_Not available._\n\n"
+        "</details>\n"
+    )
 
 def main() -> None:
     # Only PRs
@@ -152,11 +184,19 @@ def main() -> None:
 
     header = f"## 📦 Terraform Plan for `{TF_ACTIONS_WORKING_DIR}` {marker_html}"
     summary = build_summary_md()
-    details_html = read_plan_details()
-    body = f"{header}\n\n{summary}\n{details_html}\n🔗 [View run logs & artifacts]({workflow_url()})\n{footer_md()}\n{marker_html}\n"
+    details_html = ""  # no plan details, lint-style minimal comment
+    footer = footer_md()
+    # Compose body: header, summary, details, then metadata block outside details, then marker
+    body = (
+        f"{header}\n\n"
+        f"{summary}\n"
+        f"{details_html}\n"
+        f"{footer}\n"
+    )
 
     print(f"::notice::Upserting Terraform plan PR comment for {TF_ACTIONS_WORKING_DIR} with marker {marker_html}")
-    existing_id = find_existing_comment_id(pr_number, marker_html)
+    # Pass only the working dir to the marker-matching function (for hidden marker search)
+    existing_id = find_existing_comment_id(pr_number, TF_ACTIONS_WORKING_DIR)
     try:
         if existing_id:
             update_comment(existing_id, body)

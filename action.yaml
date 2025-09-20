@@ -238,6 +238,11 @@ runs:
       shell: bash
       run: terraform -chdir="${{ inputs.working_dir }}" show -json tfplan > "${{ inputs.working_dir }}/tfplan.json"
 
+    - name: Terraform show (human) → plan.txt (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      shell: bash
+      run: terraform -chdir="${{ inputs.working_dir }}" show tfplan > "${{ inputs.working_dir }}/plan.txt"
+
     - name: Checkout PR base into __base
       if: ${{ inputs.mode == 'pr' && inputs.infracost_enable == 'true' }}
       uses: actions/checkout@v5
@@ -410,16 +415,36 @@ runs:
         script: |
           const fs = require('fs'), path = require('path');
           const { owner, repo } = context.repo;
-          const pr = context.payload.pull_request; if (!pr) return;
+          const pr = context.payload.pull_request;
+          if (!pr) { core.notice('No PR context; skipping Infracost comment.'); return; }
           const issue_number = pr.number;
-          const body = fs.readFileSync(path.join(process.env.WD, 'infracost_comment.md'), 'utf8');
+          const file = path.join(process.env.WD, 'infracost_comment.md');
           const marker = `<!-- infracost-comment:${process.env.WD} -->`;
+
+          // If no file (e.g., zero delta + silent skip), remove any existing comment and exit.
+          if (!fs.existsSync(file)) {
+            core.notice('Infracost delta was zero or comment generation skipped — no comment file found.');
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+              core.notice(`Deleted existing Infracost comment (id=${existing.id}).`);
+            } else {
+              core.notice('No existing Infracost comment to delete.');
+            }
+            return;
+          }
+
+          // Otherwise, upsert the comment.
+          const body = fs.readFileSync(file, 'utf8');
           const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
           const existing = comments.find(c => c.body && c.body.includes(marker));
           if (existing) {
             await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            core.notice(`Updated Infracost comment (id=${existing.id}).`);
           } else {
             await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            core.notice('Created Infracost comment.');
           }
 
     - name: Prepare BASE (HEAD~1)

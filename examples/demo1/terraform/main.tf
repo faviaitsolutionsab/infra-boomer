@@ -34,3 +34,7 @@ variable "not_used" {
   type    = string
   default = "hello"
 }
+
+variable "no_type" {
+  default = "no_type"
+}
