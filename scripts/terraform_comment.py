@@ -182,10 +182,16 @@ def main() -> None:
 
     header = f"## 📦 Terraform Plan for `{TF_ACTIONS_WORKING_DIR}` {marker_html}"
     summary = build_summary_md()
+    details_html = read_plan_details().rstrip()
     footer = footer_md()
-    details_html = read_plan_details()
-    # Compose body: header, summary, details, footer, marker
-    body = f"{header}\n\n{summary}\n{details_html}\n{footer}\n{marker_html}\n"
+    # Compose body: header, summary, details, (ensure footer is outside <details>), marker
+    body = (
+        f"{header}\n\n"
+        f"{summary}\n"
+        f"{details_html}\n\n"
+        f"{footer}\n"
+        f"{marker_html}\n"
+    )
 
     print(f"::notice::Upserting Terraform plan PR comment for {TF_ACTIONS_WORKING_DIR} with marker {marker_html}")
     existing_id = find_existing_comment_id(pr_number, marker_html)
