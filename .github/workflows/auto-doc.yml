@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [ main]
     paths:
-      - action.yml
+      - action.yaml
       - README.md
 permissions:
   contents: write
