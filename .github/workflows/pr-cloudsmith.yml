@@ -1,4 +1,4 @@
-name: PR — CloudSmith (self-test)
+name: PR (self-test)
 
 on:
   pull_request:
