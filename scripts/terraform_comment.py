@@ -18,6 +18,7 @@ GITHUB_WORKFLOW = os.environ.get("GITHUB_WORKFLOW", "")
 TF_ACTIONS_WORKING_DIR = (os.environ.get("TF_ACTIONS_WORKING_DIR", ".") or ".").strip()
 PR_COMMENT_MARKER = (os.environ.get("PR_COMMENT_MARKER", "") or "").strip()
 CREATE_COMMENT = os.environ.get("CREATE_COMMENT", "false").lower() == "true"
+GITHUB_SHA = os.environ.get("GITHUB_SHA", "")
 
 # Counts exported by action step
 TF_ADD_COUNT = os.environ.get("TF_ADD_COUNT", "0")
@@ -32,14 +33,34 @@ SESSION.headers.update({
   "User-Agent": "terraform-plan-pr-comment/py",
 })
 
-# ---- Helpers
 def get_pr_number() -> Optional[int]:
-    if not EVENT_PATH or not Path(EVENT_PATH).is_file():
-        return None
-    with open(EVENT_PATH, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-    if "pull_request" in payload and "number" in payload:
-        return int(payload["number"])
+    # Primary: read PR number from the event payload (works for pull_request events)
+    if EVENT_PATH and Path(EVENT_PATH).is_file():
+        try:
+            with open(EVENT_PATH, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if "pull_request" in payload and "number" in payload:
+                return int(payload["number"])
+            # Some events nest differently; try common locations
+            if "issue" in payload and "pull_request" in payload.get("issue", {}):
+                return int(payload["issue"].get("number"))
+        except Exception as e:
+            print(f"::warning::Failed reading event payload for PR number: {e}")
+    # Fallback: query PRs associated with this commit SHA
+    if GITHUB_SHA:
+        try:
+            url = f"{GITHUB_API}/repos/{OWNER}/{REPO_NAME}/commits/{GITHUB_SHA}/pulls"
+            r = SESSION.get(
+                url,
+                headers={"Accept": "application/vnd.github.groot-preview+json"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            prs = r.json()
+            if isinstance(prs, list) and prs:
+                return int(prs[0].get("number"))
+        except Exception as e:
+            print(f"::warning::Failed resolving PR via commit association: {e}")
     return None
 
 def list_all_comments(pr_number: int) -> List[dict]:
